@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/joho/godotenv"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 type LoginRequest struct {
@@ -32,23 +33,23 @@ type LoginResponse struct {
 	Context string `json:"context"`
 }
 
-func main() {
+const (
+	apiBaseURL    = "https://api.cert.tastyworks.com"
+	loginEndpoint = "/sessions"
+)
 
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatalf("Error loading .env file: %v", err)
+type TastyClient struct {
+	httpClient   *http.Client
+	sessionToken string
+}
+
+func NewTastyClient() *TastyClient {
+	return &TastyClient{
+		httpClient: &http.Client{},
 	}
+}
 
-	username := os.Getenv("TASTY_USERNAME")
-	password := os.Getenv("TASTY_PASSWORD")
-
-	if username == "" {
-		log.Fatal("TASTY_USERNAME is not set in the .env file")
-	}
-	if password == "" {
-		log.Fatal("TASTY_PASSWORD is not set in the .env file")
-	}
-
+func (c *TastyClient) Login(username, password string) (*LoginResponse, error) {
 	loginPayload := LoginRequest{
 		Login:      username,
 		Password:   password,
@@ -57,37 +58,55 @@ func main() {
 
 	payloadBytes, err := json.Marshal(loginPayload)
 	if err != nil {
-		log.Fatalf("Error marshalling payload: %v", err)
+		return nil, fmt.Errorf("error marshalling payload: %w", err)
 	}
 
-	client := &http.Client{}
-	req, err := http.NewRequest("POST", "https://api.cert.tastyworks.com/sessions", bytes.NewBuffer(payloadBytes))
+	req, err := http.NewRequest("POST", apiBaseURL+loginEndpoint, bytes.NewBuffer(payloadBytes))
 	if err != nil {
-		log.Fatalf("Http Request to tastyworks failed: %v", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		log.Fatalf("Error making request: %v", err)
+		return nil, fmt.Errorf("error making request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatalf("Error loading response body: %v", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("Request failed: %s\n%s", resp.Status, string(body))
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("request failed with status %s: %s", resp.Status, string(body))
 	}
 
 	var loginResp LoginResponse
-	err = json.Unmarshal(body, &loginResp)
-	if err != nil {
-		log.Fatalf("Error unmarshalling the response: %v", err)
+	if err := json.NewDecoder(resp.Body).Decode(&loginResp); err != nil {
+		return nil, fmt.Errorf("error unmarshalling response: %w", err)
 	}
+
+	c.sessionToken = loginResp.Data.SessionToken
+	return &loginResp, nil
+}
+
+func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Fatalf("Error loading .env file: %v", err)
+	}
+
+	username := os.Getenv("TASTY_USERNAME")
+	password := os.Getenv("TASTY_PASSWORD")
+
+	if username == "" || password == "" {
+		log.Fatal("TASTY_USERNAME and TASTY_PASSWORD must be set in the .env file")
+	}
+
+	client := NewTastyClient()
+	loginResp, err := client.Login(username, password)
+	if err != nil {
+		log.Fatalf("Login failed: %v", err)
+	}
+
 	fmt.Printf("Session Token: %s\n", loginResp.Data.SessionToken)
+	fmt.Printf("Remember Token: %s\n", loginResp.Data.RememberToken)
 	fmt.Printf("Email: %s\n", loginResp.Data.User.Email)
 	fmt.Printf("Session expiration: %s\n", loginResp.Data.SessionExpiration)
 }

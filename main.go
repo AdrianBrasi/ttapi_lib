@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -85,6 +86,31 @@ func (c *TastyClient) Login(username, password string) (*LoginResponse, error) {
 
 	c.sessionToken = loginResp.Data.SessionToken
 	return &loginResp, nil
+}
+
+func (c *TastyClient) KillSession() error {
+	if c.sessionToken == "" {
+		return fmt.Errorf("Cannot Kill session because the session token is not present")
+	}
+
+	req, err := http.NewRequest("DELETE", apiBaseURL+loginEndpoint, nil)
+	if err != nil {
+		return fmt.Errorf("Failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", c.sessionToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("Failed to make request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Failed to close the session: %w", string(body))
+	}
+	return nil
 }
 
 func main() {
